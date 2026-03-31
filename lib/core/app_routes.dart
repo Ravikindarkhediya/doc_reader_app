@@ -1,18 +1,14 @@
-import 'package:doc_reader/core/render_binding.dart';
 import 'package:get/get.dart';
+import '../view/home_wrapper.dart';
 import '../view/reader_view.dart';
-
-class AppRoutes {
-  static const reader = '/reader';
-}
-
+import '../view/all_documents_screen.dart';
 
 class AppPages {
   static final routes = [
-    GetPage(
-      name: AppRoutes.reader,
-      page: () => const ReaderView(),
-      binding: ReaderBinding(),
-    ),
+    GetPage(name: '/', page: () => const HomeWrapper()),
+    GetPage(name: '/reader', page: () => const ReaderView()),
+    GetPage(name: '/all-docs', page: () => const AllDocumentsScreen()),
+    GetPage(name: '/bookmarks', page: () => const BookmarksScreen()),
+    GetPage(name: '/liked', page: () => const LikedScreen()),
   ];
 }

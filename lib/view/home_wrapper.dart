@@ -1,73 +1,95 @@
-import 'package:doc_reader/core/app_color.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../controller/home_controller.dart';
+import '../controller/theme_controller.dart';
+import 'home_view.dart';
+import 'settings_view.dart';
 
 class HomeWrapper extends GetView<HomeController> {
   const HomeWrapper({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() => Scaffold(
-      body: controller.pages[controller.currentIndex.value],
+    final c = Theme.of(context).extension<AppColorExtension>()!;
 
+    final pages = [
+      const HomeView(),
+      const SettingsView(),
+    ];
+
+    return Obx(() => Scaffold(
+      body: pages[controller.currentTabIndex.value],
       bottomNavigationBar: Container(
-        margin: const EdgeInsets.all(12),
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          color: c.card,
+          borderRadius: BorderRadius.circular(22),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.08),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
+              color: c.shadow,
+              blurRadius: 20,
+              offset: const Offset(0, 6),
             ),
           ],
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _navItem(Icons.home, "Home", 0),
-            _navItem(Icons.picture_as_pdf, "Docs", 1),
-            _navItem(Icons.settings, "Settings", 2),
+            _navItem(Icons.home_rounded, Icons.home_outlined, "Home", 0, c),
+            _navItem(Icons.settings_rounded, Icons.settings_outlined, "Settings", 1, c),
           ],
         ),
       ),
     ));
   }
 
-  Widget _navItem(IconData icon, String label, int index) {
-    final isSelected = controller.currentIndex.value == index;
-
-    return GestureDetector(
-      onTap: () => controller.changeTab(index),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary.withOpacity(0.1) : Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? Colors.blue : Colors.grey,
-            ),
-            if (isSelected) ...[
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.blue,
-                  fontWeight: FontWeight.w600,
-                ),
+  Widget _navItem(
+    IconData activeIcon,
+    IconData inactiveIcon,
+    String label,
+    int index,
+    AppColorExtension c,
+  ) {
+    return Obx(() {
+      final isSelected = controller.currentTabIndex.value == index;
+      return GestureDetector(
+        onTap: () => controller.currentTabIndex.value = index,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected ? c.primary.withOpacity(0.12) : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isSelected ? activeIcon : inactiveIcon,
+                color: isSelected ? c.primary : c.textSecondary,
+                size: 22,
+              ),
+              AnimatedSize(
+                duration: const Duration(milliseconds: 250),
+                child: isSelected
+                    ? Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            color: c.primary,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
               ),
             ],
-          ],
+          ),
         ),
-      ),
-    );
+      );
+    });
   }
 }
