@@ -122,9 +122,7 @@ class DocCard extends StatelessWidget {
                         "• ${doc.readTimeEstimate}",
                         style: TextStyle(fontSize: 11, color: c.textLight),
                       ),
-                      if (doc.isBookmarked)
-                        Icon(Icons.bookmark_rounded, size: 12, color: c.primary),
-                    ],
+                     ],
                   ),
                 ],
               ),

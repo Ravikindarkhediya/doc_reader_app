@@ -7,10 +7,8 @@ import '../core/chunk_engine.dart';
 import '../data/model/document_model.dart';
 
 class ReaderController extends GetxController {
-  // TTS
   final FlutterTts tts = FlutterTts();
 
-  // State
   var currentDoc = Rxn<DocumentModel>();
   var chunks = <String>[].obs;
   var currentIndex = 0.obs;
@@ -19,21 +17,31 @@ class ReaderController extends GetxController {
   var isLoading = false.obs;
   var hasError = false.obs;
   var errorMessage = ''.obs;
-
-  // Voice / Language
+  var paragraphs = <String>[].obs;
   var availableVoices = <Map>[].obs;
   var availableLanguages = <String>[].obs;
   var selectedVoice = Rxn<Map>();
   var selectedLanguage = 'en-US'.obs;
-
-  // Reading Mode
-  var chunkMode = ChunkMode.sentence.obs;
-
-  // Save as MP3 state
   var isSavingMp3 = false.obs;
+  var isCompleted = false.obs;
+
+  // Word-level tracking
+  var words = <String>[].obs;
+  var currentWordIndex = 0.obs;
+
+  // Paragraph-level tracking (for highlighting which paragraph is active)
+  var currentParagraphIndex = 0.obs;
+
+  // Scroll controller — exposed so View can assign a key
+  final scrollController = ScrollController();
+  // Per-word GlobalKeys so we can scroll the active word into view
+  final List<GlobalKey> wordKeys = [];
 
   Completer? _completer;
-  bool _stopRequested = false;
+  bool _isStopping = false;
+
+  // ── Word offset map: word global-index → (paragraphIndex, wordIndexInPara) ──
+  final List<_WordPos> _wordPositions = [];
 
   @override
   void onInit() {
@@ -44,11 +52,22 @@ class ReaderController extends GetxController {
   Future<void> _initTts() async {
     tts.awaitSpeakCompletion(true);
     await tts.setSpeechRate(speed.value);
+    await tts.setLanguage(selectedLanguage.value);
 
-    tts.setCompletionHandler(() => _completer?.complete());
+    tts.setCompletionHandler(() {
+      if (!_isStopping) {
+        _completer?.complete();
+      }
+    });
+
     tts.setErrorHandler((msg) {
       debugPrint("TTS Error: $msg");
       _completer?.complete();
+    });
+
+    // Progress handler — match spoken word to our word list
+    tts.setProgressHandler((text, start, end, word) {
+      _onTtsWord(word, start, end);
     });
 
     try {
@@ -56,38 +75,100 @@ class ReaderController extends GetxController {
       if (voices is List) {
         availableVoices.value = List<Map>.from(voices);
       }
-
       final langs = await tts.getLanguages;
       if (langs is List) {
-        availableLanguages.value = List<String>.from(langs.map((e) => e.toString()));
+        availableLanguages.value =
+        List<String>.from(langs.map((e) => e.toString()));
       }
     } catch (e) {
       debugPrint("TTS init error: $e");
     }
   }
 
-  // Load document into reader
+  // ── Called by TTS progress handler ──────────────────────────────────────────
+  void _onTtsWord(String word, int start, int end) {
+    // The TTS reports the word it's currently speaking.
+    // We search forward from currentWordIndex to find the matching word.
+    final searchStart = currentWordIndex.value;
+    final searchEnd = (searchStart + 60).clamp(0, words.length);
+
+    for (int i = searchStart; i < searchEnd; i++) {
+      // Strip punctuation for comparison
+      final clean = words[i].replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '').toLowerCase();
+      final spoken = word.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '').toLowerCase();
+      if (clean == spoken || clean.startsWith(spoken) || spoken.startsWith(clean)) {
+        currentWordIndex.value = i;
+        updateParagraphIndex(i);
+        scrollToWord(i);
+        _savePosition();
+        break;
+      }
+    }
+  }
+
+  void updateParagraphIndex(int wordIndex) {
+    if (wordIndex < _wordPositions.length) {
+      currentParagraphIndex.value = _wordPositions[wordIndex].paragraphIndex;
+    }
+  }
+
+  void scrollToWord(int index) {
+    if (index < wordKeys.length) {
+      final key = wordKeys[index];
+      final ctx = key.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+          alignment: 0.4, // keep highlighted word slightly above center
+        );
+      }
+    }
+  }
+
+  // ── Document setup ───────────────────────────────────────────────────────────
   void setDocument(DocumentModel doc) {
     currentDoc.value = doc;
     isLoading.value = true;
     hasError.value = false;
+    currentWordIndex.value = 0;
+    currentParagraphIndex.value = 0;
 
     try {
-      final text = doc.extractedText.trim().isEmpty
+      final rawText = doc.extractedText.trim().isEmpty
           ? "No readable content found in this document."
           : doc.extractedText;
 
-      chunks.value = ChunkEngine.splitIntoChunks(text, mode: chunkMode.value);
+      final cleaned = ChunkEngine.cleanText(rawText);
 
-      if (chunks.isEmpty) {
-        hasError.value = true;
-        errorMessage.value = "Could not parse document content.";
+      // Split into paragraphs — preserve single line-breaks as paragraph breaks
+      paragraphs.value = cleaned
+          .split(RegExp(r'\n+'))
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+
+      // Build flat word list + position map
+      words.clear();
+      _wordPositions.clear();
+      wordKeys.clear();
+
+      for (int pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+        final paraWords = paragraphs[pIdx].split(RegExp(r'\s+'));
+        for (int wIdx = 0; wIdx < paraWords.length; wIdx++) {
+          final w = paraWords[wIdx];
+          if (w.isEmpty) continue;
+          words.add(w);
+          _wordPositions.add(_WordPos(pIdx, wIdx));
+          wordKeys.add(GlobalKey());
+        }
       }
 
-      // Resume from last position
-      final savedPos = doc.lastPosition;
-      currentIndex.value =
-          (savedPos < chunks.length) ? savedPos : 0;
+      // Restore last position
+      if (doc.lastPosition > 0 && doc.lastPosition < words.length) {
+        currentWordIndex.value = doc.lastPosition;
+      }
     } catch (e) {
       hasError.value = true;
       errorMessage.value = "Error loading document: $e";
@@ -96,160 +177,116 @@ class ReaderController extends GetxController {
     }
   }
 
-  void changeChunkMode(ChunkMode mode) {
-    chunkMode.value = mode;
-    if (currentDoc.value != null) {
-      setDocument(currentDoc.value!);
-    }
-  }
-
-  // PLAY
+  // ── Playback ─────────────────────────────────────────────────────────────────
   Future<void> play() async {
-    if (chunks.isEmpty || isPlaying.value) return;
+    if (words.isEmpty || isPlaying.value) return;
 
-    _stopRequested = false;
     isPlaying.value = true;
+    _isStopping = false;
 
-    while (isPlaying.value &&
-        !_stopRequested &&
-        currentIndex.value < chunks.length) {
+    // Speak from current word to end
+    final remaining = words.sublist(currentWordIndex.value).join(' ');
 
-      final text = chunks[currentIndex.value];
-
-      if (text.trim().isNotEmpty) {
-        await tts.speak(text);
-        await _waitForCompletion();
-      }
-
-      if (_stopRequested) break;
-
-      currentIndex.value++;
-
-      _savePosition();
-
-      await Future.delayed(const Duration(milliseconds: 40));
-    }
-
-    isPlaying.value = false;
-  }
-
-  Future<void> _waitForCompletion() async {
     _completer = Completer();
-    return _completer!.future;
+    await tts.speak(remaining);
+    await _completer!.future;
+
+    if (!_isStopping) {
+      isPlaying.value = false;
+      isCompleted.value = true;
+    }
   }
 
-  // PAUSE
   Future<void> pause() async {
-    _stopRequested = true;
+    if (!isPlaying.value) return;
+    _isStopping = true;
     isPlaying.value = false;
-
-    if (_completer != null && !_completer!.isCompleted) {
-      _completer!.complete();
-    }
-
+    _completer?.complete();
+    _completer = null;
     await tts.stop();
+    _isStopping = false;
   }
 
-  // REWIND (go back 1 chunk)
   Future<void> rewind() async {
-    if (currentIndex.value > 0) {
-      final wasPlaying = isPlaying.value;
-      await pause();
-      currentIndex.value--;
-      if (wasPlaying) play();
-    }
-  }
-
-  // FORWARD (go forward 1 chunk)
-  Future<void> forward() async {
-    if (currentIndex.value < chunks.length - 1) {
-      final wasPlaying = isPlaying.value;
-      await pause();
-      currentIndex.value++;
-      if (wasPlaying) play();
-    }
-  }
-
-  // Jump to specific chunk
-  Future<void> jumpTo(int index) async {
-    if (index < 0 || index >= chunks.length) return;
     final wasPlaying = isPlaying.value;
     await pause();
-    currentIndex.value = index;
-    if (wasPlaying) play();
+    currentWordIndex.value =
+        (currentWordIndex.value - 50).clamp(0, words.length - 1);
+    updateParagraphIndex(currentWordIndex.value);
+    scrollToWord(currentWordIndex.value);
+    if (wasPlaying) await play();
   }
 
-  // Speed control
+  Future<void> forward() async {
+    final wasPlaying = isPlaying.value;
+    await pause();
+    currentWordIndex.value =
+        (currentWordIndex.value + 50).clamp(0, words.length - 1);
+    updateParagraphIndex(currentWordIndex.value);
+    scrollToWord(currentWordIndex.value);
+    if (wasPlaying) await play();
+  }
+
+  Future<void> jumpToWord(int index) async {
+    final wasPlaying = isPlaying.value;
+    await pause();
+    currentWordIndex.value = index.clamp(0, words.length - 1);
+    updateParagraphIndex(currentWordIndex.value);
+    scrollToWord(currentWordIndex.value);
+    if (wasPlaying) await play();
+  }
+
+  // ── Speed ────────────────────────────────────────────────────────────────────
   Future<void> setSpeed(double value) async {
     speed.value = value;
+    final wasPlaying = isPlaying.value;
+    if (wasPlaying) await pause();
     await tts.setSpeechRate(value);
+    if (wasPlaying) await play();
   }
 
-  // Language
+  // ── Language ─────────────────────────────────────────────────────────────────
   Future<void> setLanguage(String langCode) async {
+    final wasPlaying = isPlaying.value;
+    if (wasPlaying) await pause();
     selectedLanguage.value = langCode;
-    await tts.setLanguage(langCode);
-  }
-
-  // Voice
-  Future<void> setVoice(Map voice) async {
-    selectedVoice.value = voice;
-    await tts.setVoice(Map<String, String>.from(voice));
-  }
-
-  // Bookmark current chunk
-  void toggleBookmark() {
-    final doc = currentDoc.value;
-    if (doc == null) return;
-    final idx = currentIndex.value;
-
-    if (doc.hasBookmark(idx)) {
-      doc.removeBookmark(idx);
-      Get.snackbar("Bookmark Removed", "Removed from bookmarks",
-          snackPosition: SnackPosition.BOTTOM,
-          duration: const Duration(seconds: 2));
-    } else {
-      doc.addBookmark(idx);
-      Get.snackbar("Bookmarked", "Position saved",
-          snackPosition: SnackPosition.BOTTOM,
-          duration: const Duration(seconds: 2));
-    }
-  }
-
-  bool get isCurrentChunkBookmarked {
-    final doc = currentDoc.value;
-    if (doc == null) return false;
-    return doc.hasBookmark(currentIndex.value);
-  }
-
-  // Save position
-  void _savePosition() {
-    final doc = currentDoc.value;
-    if (doc == null) return;
-    doc.lastPosition = currentIndex.value;
     try {
-      doc.save();
-    } catch (_) {}
+      await tts.setLanguage(langCode);
+    } catch (e) {
+      debugPrint("Language set error: $e — falling back to en-US");
+      selectedLanguage.value = 'en-US';
+      await tts.setLanguage('en-US');
+    }
+    if (wasPlaying) await play();
   }
 
-  // Save as MP3 (requires flutter_tts synthesize support)
-  Future<void> saveAsMp3() async {
-    if (chunks.isEmpty) return;
-    isSavingMp3.value = true;
+  // ── Voice ────────────────────────────────────────────────────────────────────
+  Future<void> setVoice(Map voice) async {
+    final wasPlaying = isPlaying.value;
+    if (wasPlaying) await pause();
+    selectedVoice.value = voice;
+    try {
+      await tts.setVoice(Map<String, String>.from(voice));
+    } catch (e) {
+      debugPrint("Voice set error: $e");
+    }
+    if (wasPlaying) await play();
+  }
 
+  // ── Save MP3 ─────────────────────────────────────────────────────────────────
+  Future<void> saveAsMp3() async {
+    if (words.isEmpty) return;
+    isSavingMp3.value = true;
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final docName = currentDoc.value?.name
-              .replaceAll(RegExp(r'[^\w\s]'), '')
-              .trim() ??
-          'audio';
+      final docName =
+          currentDoc.value?.name.replaceAll(RegExp(r'[^\w\s]'), '').trim() ??
+              'audio';
       final path = '${dir.path}/$docName.mp3';
-
-      final fullText = chunks.join('. ');
+      final fullText = words.join(' ');
       await tts.synthesizeToFile(fullText, path);
-
       Get.snackbar(
-        "✅ Saved",
+        "Saved",
         "Audio saved to: $path",
         snackPosition: SnackPosition.BOTTOM,
         duration: const Duration(seconds: 4),
@@ -262,19 +299,34 @@ class ReaderController extends GetxController {
     }
   }
 
-  double get progressPercent {
-    if (chunks.isEmpty) return 0;
-    return currentIndex.value / chunks.length;
+  // ── Helpers ───────────────────────────────────────────────────────────────────
+  void _savePosition() {
+    final doc = currentDoc.value;
+    if (doc == null) return;
+    doc.lastPosition = currentWordIndex.value;
+    try {
+      doc.save();
+    } catch (_) {}
   }
 
-  String get progressText {
-    if (chunks.isEmpty) return '0 / 0';
-    return '${currentIndex.value + 1} / ${chunks.length}';
+  String get wordProgress =>
+      "${currentWordIndex.value} / ${words.length} words";
+
+  double get progressPercent {
+    if (words.isEmpty) return 0;
+    return currentWordIndex.value / words.length;
   }
 
   @override
   void onClose() {
     tts.stop();
+    scrollController.dispose();
     super.onClose();
   }
+}
+
+class _WordPos {
+  final int paragraphIndex;
+  final int wordIndexInPara;
+  _WordPos(this.paragraphIndex, this.wordIndexInPara);
 }

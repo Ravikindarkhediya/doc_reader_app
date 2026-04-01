@@ -22,14 +22,17 @@ class DocumentModel extends HiveObject {
   @HiveField(5)
   DateTime? addedAt;
 
-  @HiveField(6)
-  List<int> bookmarks; // chunk indices that are bookmarked
-
   @HiveField(7)
   String? mimeType; // pdf, txt, docx
 
   @HiveField(8)
   int wordCount;
+
+  @HiveField(9)
+  String? title;
+
+  @HiveField(10)
+  String? subtitle;
 
   DocumentModel({
     required this.name,
@@ -38,10 +41,11 @@ class DocumentModel extends HiveObject {
     this.lastPosition = 0,
     this.isLiked = false,
     this.addedAt,
-    List<int>? bookmarks,
     this.mimeType,
     this.wordCount = 0,
-  }) : bookmarks = bookmarks ?? [];
+    this.title,
+    this.subtitle
+  });
 
   String get extension => name.split('.').last.toLowerCase();
 
@@ -51,19 +55,4 @@ class DocumentModel extends HiveObject {
     return '$mins min read';
   }
 
-  bool get isBookmarked => bookmarks.isNotEmpty;
-
-  void addBookmark(int chunkIndex) {
-    if (!bookmarks.contains(chunkIndex)) {
-      bookmarks.add(chunkIndex);
-      save();
-    }
-  }
-
-  void removeBookmark(int chunkIndex) {
-    bookmarks.remove(chunkIndex);
-    save();
-  }
-
-  bool hasBookmark(int chunkIndex) => bookmarks.contains(chunkIndex);
 }

@@ -142,65 +142,6 @@ class AllDocumentsScreen extends GetView<HomeController> {
   }
 }
 
-// ─── BOOKMARKS SCREEN ────────────────────────────────────────────────────────
-class BookmarksScreen extends GetView<HomeController> {
-  const BookmarksScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final c = Theme.of(context).extension<AppColorExtension>()!;
-
-    return Scaffold(
-      backgroundColor: c.background,
-      appBar: AppBar(
-        backgroundColor: c.card,
-        title: Text("Bookmarked", style: TextStyle(color: c.textPrimary)),
-        leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_rounded, color: c.textPrimary, size: 20),
-          onPressed: Get.back,
-        ),
-      ),
-      body: Obx(() {
-        final docs = controller.bookmarkedDocs;
-        if (docs.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.bookmark_border_rounded, size: 56, color: c.textLight),
-                const SizedBox(height: 12),
-                Text("No bookmarks yet", style: TextStyle(color: c.textSecondary, fontSize: 16)),
-                const SizedBox(height: 6),
-                Text("Long-press any sentence while reading\nto bookmark it",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: c.textLight, fontSize: 13)),
-              ],
-            ),
-          );
-        }
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: docs.length,
-          itemBuilder: (context, i) {
-            final doc = docs[i];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: DocCard(
-                doc: doc,
-                isHorizontal: false,
-                onTap: () => controller.openDocument(doc),
-                onLike: () => controller.toggleLike(doc),
-                onDelete: () => controller.deleteDoc(doc),
-                onRename: () {},
-              ),
-            );
-          },
-        );
-      }),
-    );
-  }
-}
-
 // ─── LIKED SCREEN ─────────────────────────────────────────────────────────────
 class LikedScreen extends GetView<HomeController> {
   const LikedScreen({super.key});

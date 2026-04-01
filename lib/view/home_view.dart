@@ -295,13 +295,6 @@ class HomeView extends GetView<HomeController> {
               const SizedBox(height: 24),
             ],
 
-            // Bookmarked
-            if (controller.bookmarkedDocs.isNotEmpty) ...[
-              _sectionHeader("Bookmarked 🔖", controller.goToBookmarks, c),
-              _horizontalDocList(controller.bookmarkedDocs.take(5).toList(), c),
-              const SizedBox(height: 24),
-            ],
-
             // All Documents
             _sectionHeader("All Documents", controller.goToAllDocs, c),
             if (controller.allDocs.isEmpty)

@@ -1,12 +1,11 @@
-
 class ChunkEngine {
-  /// Clean raw extracted text from PDF/DOC
+  /// Clean raw extracted text from PDF/DOC — preserves paragraph structure.
   static String cleanText(String raw) {
     if (raw.trim().isEmpty) return '';
 
     String text = raw;
 
-    // Remove null characters and control chars
+    // Remove null chars and non-printable control chars (keep \n and \t)
     text = text.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), ' ');
 
     // Normalize unicode dashes and quotes
@@ -19,85 +18,36 @@ class ChunkEngine {
         .replaceAll('\u201D', '"')
         .replaceAll('\u2026', '...');
 
-    // Fix broken hyphenation (word- \n word → word word)
+    // Fix broken hyphenation (word-\nword → wordword)
     text = text.replaceAll(RegExp(r'-\s*\n\s*'), '');
 
-    // Replace multiple newlines with single space
-    text = text.replaceAll(RegExp(r'\n{2,}'), ' ');
-    text = text.replaceAll('\n', ' ');
+    // Collapse 3+ consecutive blank lines into exactly 2 (one blank line = paragraph break)
+    text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
 
-    // Remove repeated spaces
-    text = text.replaceAll(RegExp(r'  +'), ' ');
+    // Remove lines that are ONLY page numbers (standalone 1-4 digit numbers)
+    // Use multiline mode so ^ and $ match line boundaries
+    text = text.replaceAll(RegExp(r'^\s*\d{1,4}\s*$', multiLine: true), '');
 
-    // Remove lines that are just numbers (page numbers)
-    text = text.replaceAll(RegExp(r'(?<!\w)\d{1,4}(?!\w)'), '');
+    // Remove repeated spaces within a line (but NOT newlines)
+    text = text.replaceAll(RegExp(r'[ \t]{2,}'), ' ');
 
-    // Clean trailing/leading whitespace
+    // Trim leading/trailing whitespace on each line
+    text = text.split('\n').map((l) => l.trimRight()).join('\n');
+
     text = text.trim();
 
-    return text;
-  }
-
-  /// Split text into sentence chunks for TTS
-  static List<String> splitIntoChunks(String text, {ChunkMode mode = ChunkMode.sentence}) {
-    if (text.trim().isEmpty) return [];
-
-    final cleaned = cleanText(text);
-
-    switch (mode) {
-      case ChunkMode.sentence:
-        return _splitBySentence(cleaned);
-      case ChunkMode.word:
-        return _splitByWord(cleaned);
-      case ChunkMode.paragraph:
-        return _splitByParagraph(cleaned);
-    }
-  }
-
-  static List<String> _splitBySentence(String text) {
-    final sentences = text.split(RegExp(r'(?<=[.!?])\s+'));
-
-    List<String> chunks = [];
-    String buffer = '';
-
-    for (var s in sentences) {
-      if ((buffer + s).length < 200) {
-        buffer += ' $s';
-      } else {
-        chunks.add(buffer.trim());
-        buffer = s;
-      }
-    }
-
-    if (buffer.isNotEmpty) {
-      chunks.add(buffer.trim());
-    }
-
-    return chunks;
-  }
-
-  static List<String> _splitByWord(String text) {
-    return text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-  }
-
-  static List<String> _splitByParagraph(String text) {
-    return text
-        .split(RegExp(r'\.\s{2,}|\n{2,}'))
-        .map((p) => p.trim())
-        .where((p) => p.length > 10)
-        .toList();
+    return text.isNotEmpty ? text : "No readable content";
   }
 
   /// Estimate read time in minutes
   static double estimateReadTime(List<String> chunks) {
     final totalWords = chunks.join(' ').split(' ').length;
-    return totalWords / 200.0; // avg 200 wpm
+    return totalWords / 200.0;
   }
 
   /// Get word count
   static int wordCount(String text) {
+    if (text.trim().isEmpty) return 0;
     return text.trim().split(RegExp(r'\s+')).length;
   }
 }
-
-enum ChunkMode { sentence, word, paragraph }

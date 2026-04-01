@@ -1,8 +1,10 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
-// Run: flutter pub run build_runner build --delete-conflicting-outputs
-// If you added new HiveFields, delete this file and re-run build_runner.
 
 part of 'document_model.dart';
+
+// **************************************************************************
+// TypeAdapterGenerator
+// **************************************************************************
 
 class DocumentModelAdapter extends TypeAdapter<DocumentModel> {
   @override
@@ -17,20 +19,19 @@ class DocumentModelAdapter extends TypeAdapter<DocumentModel> {
     return DocumentModel(
       name: fields[0] as String,
       path: fields[1] as String,
-      extractedText: fields[2] as String? ?? '',
-      lastPosition: fields[3] as int? ?? 0,
-      isLiked: fields[4] as bool? ?? false,
+      extractedText: fields[2] as String,
+      lastPosition: fields[3] as int,
+      isLiked: fields[4] as bool,
       addedAt: fields[5] as DateTime?,
-      bookmarks: (fields[6] as List?)?.cast<int>(),
       mimeType: fields[7] as String?,
-      wordCount: fields[8] as int? ?? 0,
+      wordCount: fields[8] as int,
     );
   }
 
   @override
   void write(BinaryWriter writer, DocumentModel obj) {
     writer
-      ..writeByte(9)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.name)
       ..writeByte(1)
@@ -43,8 +44,6 @@ class DocumentModelAdapter extends TypeAdapter<DocumentModel> {
       ..write(obj.isLiked)
       ..writeByte(5)
       ..write(obj.addedAt)
-      ..writeByte(6)
-      ..write(obj.bookmarks)
       ..writeByte(7)
       ..write(obj.mimeType)
       ..writeByte(8)

@@ -8,7 +8,6 @@ class AppPages {
     GetPage(name: '/', page: () => const HomeWrapper()),
     GetPage(name: '/reader', page: () => const ReaderView()),
     GetPage(name: '/all-docs', page: () => const AllDocumentsScreen()),
-    GetPage(name: '/bookmarks', page: () => const BookmarksScreen()),
     GetPage(name: '/liked', page: () => const LikedScreen()),
   ];
 }

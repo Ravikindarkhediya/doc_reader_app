@@ -19,7 +19,6 @@ class HomeController extends GetxController {
   var allDocs = <DocumentModel>[].obs;
   var recentDocs = <DocumentModel>[].obs;
   var likedDocs = <DocumentModel>[].obs;
-  var bookmarkedDocs = <DocumentModel>[].obs;
   var filteredDocs = <DocumentModel>[].obs;
 
   var originalDocs = <DocumentModel>[];
@@ -46,7 +45,6 @@ class HomeController extends GetxController {
 
   void _refreshFilteredLists() {
     likedDocs.value = originalDocs.where((d) => d.isLiked).toList();
-    bookmarkedDocs.value = originalDocs.where((d) => d.isBookmarked).toList();
     recentDocs.value = List.from(originalDocs.reversed);
 
     // Apply search if active
@@ -292,10 +290,6 @@ class HomeController extends GetxController {
   // Navigate to All Docs screen
   void goToAllDocs() {
     Get.to(() => const AllDocumentsScreen(), transition: Transition.rightToLeft);
-  }
-
-  void goToBookmarks() {
-    Get.to(() => const BookmarksScreen(), transition: Transition.rightToLeft);
   }
 
   void goToLiked() {

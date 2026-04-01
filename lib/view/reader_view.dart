@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-
 import '../controller/reader_controller.dart';
 import '../controller/theme_controller.dart';
-import '../core/chunk_engine.dart';
 
 class ReaderView extends GetView<ReaderController> {
   const ReaderView({super.key});
@@ -17,7 +15,7 @@ class ReaderView extends GetView<ReaderController> {
       appBar: _buildAppBar(c),
       body: Column(
         children: [
-          // Progress bar
+          // ── Top progress bar ──────────────────────────────────────────────
           Obx(() => LinearProgressIndicator(
             value: controller.progressPercent,
             backgroundColor: c.highlight,
@@ -25,16 +23,17 @@ class ReaderView extends GetView<ReaderController> {
             minHeight: 3,
           )),
 
-          // Reader body
-          Expanded(child: _buildReader(c)),
+          // ── Word reader body ──────────────────────────────────────────────
+          Expanded(child: _buildWordView(c)),
 
-          // Mini player
+          // ── Mini player ───────────────────────────────────────────────────
           _buildMiniPlayer(c),
         ],
       ),
     );
   }
 
+  // ── AppBar ────────────────────────────────────────────────────────────────
   PreferredSizeWidget _buildAppBar(AppColorExtension c) {
     return AppBar(
       backgroundColor: c.card,
@@ -46,37 +45,39 @@ class ReaderView extends GetView<ReaderController> {
           Get.back();
         },
       ),
-      title: Obx(() => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            controller.currentDoc.value?.name ?? "Reader",
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: c.textPrimary,
+      title: Obx(() {
+        final doc = controller.currentDoc.value;
+        final title = doc?.title?.isNotEmpty == true ? doc!.title! : doc?.name ?? "Reader";
+        final subtitle = doc?.subtitle?.isNotEmpty == true ? doc!.subtitle : null;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: c.textPrimary,
+              ),
             ),
-          ),
-          Text(
-            controller.progressText,
-            style: TextStyle(fontSize: 11, color: c.textSecondary),
-          ),
-        ],
-      )),
+            if (subtitle != null)
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: c.textSecondary),
+              ),
+            Text(
+              controller.wordProgress,
+              style: TextStyle(fontSize: 10, color: c.textSecondary),
+            ),
+          ],
+        );
+      }),
       actions: [
-        // Bookmark current chunk
-        Obx(() => IconButton(
-          icon: Icon(
-            controller.isCurrentChunkBookmarked
-                ? Icons.bookmark_rounded
-                : Icons.bookmark_border_rounded,
-            color: controller.isCurrentChunkBookmarked ? c.primary : c.textSecondary,
-          ),
-          onPressed: controller.toggleBookmark,
-        )),
-        // More options
         IconButton(
           icon: Icon(Icons.tune_rounded, color: c.textSecondary),
           onPressed: () => _showOptionsSheet(c),
@@ -85,165 +86,262 @@ class ReaderView extends GetView<ReaderController> {
     );
   }
 
-  Widget _buildReader(AppColorExtension c) {
+  // ── Word View ─────────────────────────────────────────────────────────────
+  Widget _buildWordView(AppColorExtension c) {
     return Obx(() {
       if (controller.isLoading.value) {
-        return Center(child: CircularProgressIndicator(color: c.primary));
+        return const Center(child: CircularProgressIndicator());
       }
 
       if (controller.hasError.value) {
         return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.error_outline_rounded, size: 56, color: c.error),
-                const SizedBox(height: 16),
-                Text(
-                  controller.errorMessage.value,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: c.textSecondary),
-                ),
-              ],
-            ),
+          child: Text(
+            controller.errorMessage.value,
+            style: TextStyle(color: c.textSecondary),
           ),
         );
       }
 
-      if (controller.chunks.isEmpty) {
+      if (controller.words.isEmpty) {
         return Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.text_snippet_outlined, size: 56, color: c.textLight),
-              const SizedBox(height: 12),
-              Text("No content to display",
-                  style: TextStyle(color: c.textSecondary)),
-            ],
-          ),
+          child: Text("No content", style: TextStyle(color: c.textSecondary)),
         );
       }
 
-      return ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        itemCount: controller.chunks.length,
-        itemBuilder: (context, index) {
-          return Obx(() {
-            final isActive = controller.currentIndex.value == index;
-            final isBookmarked = controller.currentDoc.value?.hasBookmark(index) ?? false;
-
-            return GestureDetector(
-              onTap: () => controller.jumpTo(index),
-              onLongPress: () {
-                // Toggle bookmark on long press
-                controller.jumpTo(index);
-                controller.toggleBookmark();
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeOut,
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                decoration: BoxDecoration(
-                  color: isActive ? c.highlight : Colors.transparent,
-                  borderRadius: BorderRadius.circular(14),
-                  border: isBookmarked
-                      ? Border.all(color: c.primary.withOpacity(0.4), width: 1.5)
-                      : null,
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (isBookmarked)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 3, right: 8),
-                        child: Icon(Icons.bookmark_rounded, size: 14, color: c.primary),
-                      ),
-                    Expanded(
-                      child: Text(
-                        controller.chunks[index],
-                        style: TextStyle(
-                          fontSize: isActive ? 18 : 15,
-                          height: 1.7,
-                          color: isActive ? c.textPrimary : c.textSecondary,
-                          fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          });
-        },
+      // We render paragraph by paragraph.
+      // Each paragraph is a card container. Words inside are Wrap'd with
+      // per-word highlighting via GlobalKeys.
+      return SingleChildScrollView(
+        controller: controller.scrollController,
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: _buildParagraphCards(c),
+        ),
       );
     });
   }
 
+  List<Widget> _buildParagraphCards(AppColorExtension c) {
+    final paragraphs = controller.paragraphs;
+    final widgets = <Widget>[];
+    int wordOffset = 0; // global word index offset for current paragraph
+
+    for (int pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+      final paraWords = paragraphs[pIdx]
+          .split(RegExp(r'\s+'))
+          .where((w) => w.isNotEmpty)
+          .toList();
+
+      final int paraStartIndex = wordOffset;
+      final int capturedWordOffset = wordOffset;
+
+      widgets.add(
+        Obx(() {
+          final activeWordIdx = controller.currentWordIndex.value;
+          final activeParagraph = controller.currentParagraphIndex.value;
+          final isParagraphActive = activeParagraph == pIdx;
+
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isParagraphActive
+                  ? c.primary.withOpacity(0.06)
+                  : c.card,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isParagraphActive
+                    ? c.primary.withOpacity(0.25)
+                    : Colors.transparent,
+                width: 1.5,
+              ),
+            ),
+            child: Wrap(
+              spacing: 4,
+              runSpacing: 6,
+              children: List.generate(paraWords.length, (wIdx) {
+                final globalIdx = capturedWordOffset + wIdx;
+                final isActive = globalIdx == activeWordIdx;
+
+                // Bounds check — keys list is built during setDocument
+                final hasKey = globalIdx < controller.wordKeys.length;
+
+                return GestureDetector(
+                  onTap: () => controller.jumpToWord(globalIdx),
+                  child: Container(
+                    key: hasKey ? controller.wordKeys[globalIdx] : null,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 3, vertical: 2),
+                    decoration: isActive
+                        ? BoxDecoration(
+                      color: c.primary.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    )
+                        : null,
+                    child: Text(
+                      paraWords[wIdx],
+                      style: TextStyle(
+                        fontSize: 16,
+                        height: 1.65,
+                        color: isActive ? c.primary : c.textPrimary,
+                        fontWeight: isActive
+                            ? FontWeight.w700
+                            : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          );
+        }),
+      );
+
+      wordOffset += paraWords.length;
+    }
+
+    return widgets;
+  }
+
+  // ── Mini Player ───────────────────────────────────────────────────────────
   Widget _buildMiniPlayer(AppColorExtension c) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 22),
       decoration: BoxDecoration(
         color: c.card,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        boxShadow: [BoxShadow(color: c.shadow, blurRadius: 20, offset: const Offset(0, -4))],
+        borderRadius:
+        const BorderRadius.vertical(top: Radius.circular(24)),
+        boxShadow: [
+          BoxShadow(
+            color: c.shadow,
+            blurRadius: 20,
+            offset: const Offset(0, -4),
+          ),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Speed row
-          Row(
+          // ── Seek slider (word position) ─────────────────────────────────
+          Obx(() {
+            final total = controller.words.length.toDouble();
+            final current = controller.currentWordIndex.value
+                .toDouble()
+                .clamp(0.0, total > 0 ? total : 1.0);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.text_fields_rounded,
+                        size: 14, color: c.textSecondary),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: SliderTheme(
+                        data: SliderTheme.of(Get.context!).copyWith(
+                          trackHeight: 3,
+                          thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 7),
+                          overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 14),
+                          activeTrackColor: c.primary,
+                          inactiveTrackColor: c.highlight,
+                          thumbColor: c.primary,
+                          overlayColor: c.primary.withOpacity(0.15),
+                        ),
+                        child: Slider(
+                          value: current,
+                          min: 0,
+                          max: total > 0 ? total : 1,
+                          onChangeStart: (_) {
+                            // pause while dragging for smooth UX
+                            if (controller.isPlaying.value) {
+                              controller.tts.stop();
+                            }
+                          },
+                          onChanged: (v) {
+                            controller.currentWordIndex.value = v.toInt();
+                            controller.updateParagraphIndex(v.toInt());
+                            controller.scrollToWord(v.toInt());
+                          },
+                          onChangeEnd: (v) =>
+                              controller.jumpToWord(v.toInt()),
+                        ),
+                      ),
+                    ),
+                    Text(
+                      "${controller.currentWordIndex.value}/${controller.words.length}",
+                      style: TextStyle(
+                          fontSize: 11, color: c.textSecondary),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          }),
+
+          const SizedBox(height: 4),
+
+          // ── Speed slider ────────────────────────────────────────────────
+          Obx(() => Row(
             children: [
-              Icon(Icons.speed_rounded, size: 18, color: c.textSecondary),
-              const SizedBox(width: 8),
+              Icon(Icons.speed_rounded,
+                  size: 14, color: c.textSecondary),
+              const SizedBox(width: 6),
               Expanded(
-                child: Obx(() => SliderTheme(
+                child: SliderTheme(
                   data: SliderTheme.of(Get.context!).copyWith(
                     trackHeight: 3,
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                    thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 7),
+                    overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 14),
+                    activeTrackColor: c.secondary,
+                    inactiveTrackColor: c.highlight,
+                    thumbColor: c.secondary,
+                    overlayColor: c.secondary.withOpacity(0.15),
                   ),
                   child: Slider(
                     value: controller.speed.value,
-                    min: 0.3,
+                    min: 0.1,
                     max: 1.5,
-                    divisions: 12,
-                    activeColor: c.primary,
-                    inactiveColor: c.highlight,
+                    divisions: 14,
                     onChanged: controller.setSpeed,
                   ),
-                )),
+                ),
               ),
-              Obx(() => Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: c.primary.withOpacity(0.1),
+                  color: c.secondary.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   "${controller.speed.value.toStringAsFixed(1)}x",
                   style: TextStyle(
-                    fontSize: 12,
-                    color: c.primary,
-                    fontWeight: FontWeight.w700,
-                  ),
+                      fontSize: 11,
+                      color: c.secondary,
+                      fontWeight: FontWeight.w700),
                 ),
-              )),
+              ),
             ],
-          ),
+          )),
 
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
 
-          // Controls
+          // ── Transport controls ─────────────────────────────────────────
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               _controlBtn(Icons.replay_10_rounded, c, controller.rewind),
               const SizedBox(width: 8),
-              // Play/Pause
               Obx(() => GestureDetector(
-                onTap: controller.isPlaying.value ? controller.pause : controller.play,
+                onTap: controller.isPlaying.value
+                    ? controller.pause
+                    : controller.play,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.all(18),
@@ -289,79 +387,50 @@ class ReaderView extends GetView<ReaderController> {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: c.highlight,
-          shape: BoxShape.circle,
-        ),
+        decoration:
+        BoxDecoration(color: c.highlight, shape: BoxShape.circle),
         child: Icon(icon, color: c.textPrimary, size: 24),
       ),
     );
   }
 
+  // ── Options sheet ─────────────────────────────────────────────────────────
   void _showOptionsSheet(AppColorExtension c) {
     Get.bottomSheet(
       Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: c.card,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius:
+          const BorderRadius.vertical(top: Radius.circular(24)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Options",
-                style: TextStyle(
-                    fontSize: 18, fontWeight: FontWeight.w700, color: c.textPrimary)),
+            Text(
+              "Options",
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: c.textPrimary),
+            ),
             const SizedBox(height: 16),
-
-            // Chunk Mode
-            _sheetSection("Reading Mode", c),
-            Obx(() => Row(
-              children: ChunkMode.values.map((mode) {
-                final isSelected = controller.chunkMode.value == mode;
-                final label = mode.name[0].toUpperCase() + mode.name.substring(1);
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(label),
-                    selected: isSelected,
-                    onSelected: (_) => controller.changeChunkMode(mode),
-                    selectedColor: c.primary,
-                    backgroundColor: c.highlight,
-                    labelStyle: TextStyle(
-                      color: isSelected ? Colors.white : c.textPrimary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                );
-              }).toList(),
-            )),
-
-            const SizedBox(height: 16),
-
-            // Language
-            _optTile(Icons.language_rounded, "Language", c, () => _showLanguagePicker(c)),
-
-            // Voice
-            _optTile(Icons.record_voice_over_rounded, "Voice", c, () => _showVoicePicker(c)),
-
-            // Save as MP3
+            _optTile(Icons.language_rounded, "Language", c,
+                    () => _showLanguagePicker(c)),
+            _optTile(Icons.record_voice_over_rounded, "Voice", c,
+                    () => _showVoicePicker(c)),
             Obx(() => _optTile(
               Icons.audiotrack_rounded,
               controller.isSavingMp3.value ? "Saving..." : "Save as MP3",
               c,
-              controller.isSavingMp3.value ? null : () {
+              controller.isSavingMp3.value
+                  ? null
+                  : () {
                 Get.back();
                 controller.saveAsMp3();
               },
             )),
-
-            // Bookmark
-            _optTile(Icons.bookmark_add_rounded, "Bookmark Position", c, () {
-              Get.back();
-              controller.toggleBookmark();
-            }),
           ],
         ),
       ),
@@ -369,15 +438,12 @@ class ReaderView extends GetView<ReaderController> {
     );
   }
 
-  Widget _sheetSection(String label, AppColorExtension c) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(label,
-          style: TextStyle(fontSize: 13, color: c.textSecondary, fontWeight: FontWeight.w600)),
-    );
-  }
-
-  Widget _optTile(IconData icon, String title, AppColorExtension c, VoidCallback? onTap) {
+  Widget _optTile(
+      IconData icon,
+      String title,
+      AppColorExtension c,
+      VoidCallback? onTap,
+      ) {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: Container(
@@ -388,8 +454,11 @@ class ReaderView extends GetView<ReaderController> {
         ),
         child: Icon(icon, color: c.primary, size: 20),
       ),
-      title: Text(title, style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.w500)),
-      trailing: Icon(Icons.chevron_right_rounded, color: c.textLight),
+      title: Text(title,
+          style: TextStyle(
+              color: c.textPrimary, fontWeight: FontWeight.w500)),
+      trailing:
+      Icon(Icons.chevron_right_rounded, color: c.textLight),
       onTap: onTap,
     );
   }
@@ -399,33 +468,44 @@ class ReaderView extends GetView<ReaderController> {
     Get.bottomSheet(
       Container(
         padding: const EdgeInsets.all(20),
-        height: 400,
+        height: 420,
         decoration: BoxDecoration(
           color: c.card,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius:
+          const BorderRadius.vertical(top: Radius.circular(24)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Select Language",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.textPrimary)),
+            Text(
+              "Select Language",
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: c.textPrimary),
+            ),
             const SizedBox(height: 12),
             Expanded(
               child: Obx(() {
                 final langs = controller.availableLanguages;
                 if (langs.isEmpty) {
-                  return Center(child: Text("No languages available",
-                      style: TextStyle(color: c.textSecondary)));
+                  return Center(
+                    child: Text("No languages available",
+                        style: TextStyle(color: c.textSecondary)),
+                  );
                 }
                 return ListView.builder(
                   itemCount: langs.length,
                   itemBuilder: (_, i) {
                     final lang = langs[i];
-                    final isSelected = controller.selectedLanguage.value == lang;
+                    final isSelected =
+                        controller.selectedLanguage.value == lang;
                     return ListTile(
-                      title: Text(lang, style: TextStyle(color: c.textPrimary)),
+                      title: Text(lang,
+                          style: TextStyle(color: c.textPrimary)),
                       trailing: isSelected
-                          ? Icon(Icons.check_circle_rounded, color: c.primary)
+                          ? Icon(Icons.check_circle_rounded,
+                          color: c.primary)
                           : null,
                       onTap: () {
                         controller.setLanguage(lang);
@@ -447,33 +527,46 @@ class ReaderView extends GetView<ReaderController> {
     Get.bottomSheet(
       Container(
         padding: const EdgeInsets.all(20),
-        height: 400,
+        height: 420,
         decoration: BoxDecoration(
           color: c.card,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius:
+          const BorderRadius.vertical(top: Radius.circular(24)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Select Voice",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.textPrimary)),
+            Text(
+              "Select Voice",
+              style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: c.textPrimary),
+            ),
             const SizedBox(height: 12),
             Expanded(
               child: Obx(() {
                 final voices = controller.availableVoices;
                 if (voices.isEmpty) {
-                  return Center(child: Text("No voices available",
-                      style: TextStyle(color: c.textSecondary)));
+                  return Center(
+                    child: Text("No voices available",
+                        style: TextStyle(color: c.textSecondary)),
+                  );
                 }
                 return ListView.builder(
                   itemCount: voices.length,
                   itemBuilder: (_, i) {
                     final voice = voices[i];
-                    final name = voice['name']?.toString() ?? 'Voice ${i + 1}';
-                    final locale = voice['locale']?.toString() ?? '';
+                    final name =
+                        voice['name']?.toString() ?? 'Voice ${i + 1}';
+                    final locale =
+                        voice['locale']?.toString() ?? '';
                     return ListTile(
-                      title: Text(name, style: TextStyle(color: c.textPrimary)),
-                      subtitle: Text(locale, style: TextStyle(color: c.textSecondary, fontSize: 12)),
+                      title: Text(name,
+                          style: TextStyle(color: c.textPrimary)),
+                      subtitle: Text(locale,
+                          style: TextStyle(
+                              color: c.textSecondary, fontSize: 12)),
                       onTap: () {
                         controller.setVoice(voice);
                         Get.back();
