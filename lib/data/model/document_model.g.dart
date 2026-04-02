@@ -25,13 +25,15 @@ class DocumentModelAdapter extends TypeAdapter<DocumentModel> {
       addedAt: fields[5] as DateTime?,
       mimeType: fields[7] as String?,
       wordCount: fields[8] as int,
+      title: fields[9] as String?,
+      subtitle: fields[10] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, DocumentModel obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.name)
       ..writeByte(1)
@@ -47,7 +49,11 @@ class DocumentModelAdapter extends TypeAdapter<DocumentModel> {
       ..writeByte(7)
       ..write(obj.mimeType)
       ..writeByte(8)
-      ..write(obj.wordCount);
+      ..write(obj.wordCount)
+      ..writeByte(9)
+      ..write(obj.title)
+      ..writeByte(10)
+      ..write(obj.subtitle);
   }
 
   @override

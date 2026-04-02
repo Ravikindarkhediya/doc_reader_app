@@ -21,22 +21,31 @@ class ChunkEngine {
     // Fix broken hyphenation (word-\nword → wordword)
     text = text.replaceAll(RegExp(r'-\s*\n\s*'), '');
 
-    // Collapse 3+ consecutive blank lines into exactly 2 (one blank line = paragraph break)
+    // Collapse 3+ consecutive blank lines into exactly 2 (paragraph break)
     text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
 
     // Remove lines that are ONLY page numbers (standalone 1-4 digit numbers)
-    // Use multiline mode so ^ and $ match line boundaries
     text = text.replaceAll(RegExp(r'^\s*\d{1,4}\s*$', multiLine: true), '');
 
-    // Remove repeated spaces within a line (but NOT newlines)
+    // Remove repeated spaces/tabs within a line (but NOT newlines)
     text = text.replaceAll(RegExp(r'[ \t]{2,}'), ' ');
 
     // Trim leading/trailing whitespace on each line
     text = text.split('\n').map((l) => l.trimRight()).join('\n');
 
     text = text.trim();
-
     return text.isNotEmpty ? text : "No readable content";
+  }
+
+  /// Split cleaned text into paragraphs.
+  /// Only double-newlines (\n\n) are treated as paragraph breaks.
+  /// Single \n within a paragraph is converted to a space.
+  static List<String> toParagraphs(String cleaned) {
+    return cleaned
+        .split(RegExp(r'\n{2,}'))           // split on paragraph breaks
+        .map((p) => p.replaceAll('\n', ' ').trim()) // inline newline → space
+        .where((p) => p.isNotEmpty)
+        .toList();
   }
 
   /// Estimate read time in minutes

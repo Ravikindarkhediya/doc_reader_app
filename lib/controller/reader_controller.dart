@@ -2,47 +2,54 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:get/get.dart';
+import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 import '../core/chunk_engine.dart';
+import '../core/utils/tts_utils.dart';
 import '../data/model/document_model.dart';
 
 class ReaderController extends GetxController {
   final FlutterTts tts = FlutterTts();
 
+  // ── Document ──────────────────────────────────────────────────────────────
   var currentDoc = Rxn<DocumentModel>();
-  var chunks = <String>[].obs;
-  var currentIndex = 0.obs;
-  var speed = 0.6.obs;
-  var isPlaying = false.obs;
+  var paragraphs = <String>[].obs;
+  var words = <String>[].obs;
   var isLoading = false.obs;
   var hasError = false.obs;
   var errorMessage = ''.obs;
-  var paragraphs = <String>[].obs;
+
+  // ── Playback state ────────────────────────────────────────────────────────
+  var isPlaying = false.obs;
+  var isCompleted = false.obs;
+  var speed = 0.4.obs;
+  var currentWordIndex = 0.obs;
+  var currentParagraphIndex = 0.obs;
+
+  // ── TTS options ───────────────────────────────────────────────────────────
   var availableVoices = <Map>[].obs;
   var availableLanguages = <String>[].obs;
   var selectedVoice = Rxn<Map>();
   var selectedLanguage = 'en-US'.obs;
   var isSavingMp3 = false.obs;
-  var isCompleted = false.obs;
 
-  // Word-level tracking
-  var words = <String>[].obs;
-  var currentWordIndex = 0.obs;
-
-  // Paragraph-level tracking (for highlighting which paragraph is active)
-  var currentParagraphIndex = 0.obs;
-
-  // Scroll controller — exposed so View can assign a key
+  // ── Scroll ────────────────────────────────────────────────────────────────
   final scrollController = ScrollController();
-  // Per-word GlobalKeys so we can scroll the active word into view
   final List<GlobalKey> wordKeys = [];
 
+  // ── Internal ──────────────────────────────────────────────────────────────
   Completer? _completer;
   bool _isStopping = false;
+  int _playStartWordIndex = 0;
 
-  // ── Word offset map: word global-index → (paragraphIndex, wordIndexInPara) ──
-  final List<_WordPos> _wordPositions = [];
+  /// Character offset of each word (relative to _playStartWordIndex) in the
+  /// sanitized TTS string.  Used for accurate word tracking via char offsets.
+  final List<int> _wordCharOffsets = [];
 
+  /// Maps global word index → paragraph index
+  final List<int> _wordParagraphIndex = [];
+
+  // ── Init ──────────────────────────────────────────────────────────────────
   @override
   void onInit() {
     super.onInit();
@@ -51,13 +58,17 @@ class ReaderController extends GetxController {
 
   Future<void> _initTts() async {
     tts.awaitSpeakCompletion(true);
+
+    // Restore persisted settings
+    final box = Hive.box('settings');
+    speed.value = (box.get('tts_speed', defaultValue: 0.4) as num).toDouble();
+    selectedLanguage.value = box.get('tts_language', defaultValue: 'en-US') as String;
+
     await tts.setSpeechRate(speed.value);
     await tts.setLanguage(selectedLanguage.value);
 
     tts.setCompletionHandler(() {
-      if (!_isStopping) {
-        _completer?.complete();
-      }
+      if (!_isStopping) _completer?.complete();
     });
 
     tts.setErrorHandler((msg) {
@@ -65,9 +76,9 @@ class ReaderController extends GetxController {
       _completer?.complete();
     });
 
-    // Progress handler — match spoken word to our word list
+    // Use character offset (start/end) for accurate word tracking
     tts.setProgressHandler((text, start, end, word) {
-      _onTtsWord(word, start, end);
+      _onTtsProgress(start, end, word);
     });
 
     try {
@@ -78,60 +89,87 @@ class ReaderController extends GetxController {
       final langs = await tts.getLanguages;
       if (langs is List) {
         availableLanguages.value =
-        List<String>.from(langs.map((e) => e.toString()));
+        (List<String>.from(langs.map((e) => e.toString())))..sort();
+      }
+
+      // Restore saved voice
+      final savedVoiceName = box.get('tts_voice_name') as String?;
+      if (savedVoiceName != null) {
+        final match = availableVoices.firstWhereOrNull(
+              (v) => v['name']?.toString() == savedVoiceName,
+        );
+        if (match != null) {
+          selectedVoice.value = match;
+          await tts.setVoice(Map<String, String>.from(match));
+        }
       }
     } catch (e) {
       debugPrint("TTS init error: $e");
     }
   }
 
-  // ── Called by TTS progress handler ──────────────────────────────────────────
-  void _onTtsWord(String word, int start, int end) {
-    // The TTS reports the word it's currently speaking.
-    // We search forward from currentWordIndex to find the matching word.
-    final searchStart = currentWordIndex.value;
-    final searchEnd = (searchStart + 60).clamp(0, words.length);
+  // ── Word char-offset tracking ─────────────────────────────────────────────
 
-    for (int i = searchStart; i < searchEnd; i++) {
-      // Strip punctuation for comparison
-      final clean = words[i].replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '').toLowerCase();
-      final spoken = word.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '').toLowerCase();
-      if (clean == spoken || clean.startsWith(spoken) || spoken.startsWith(clean)) {
-        currentWordIndex.value = i;
-        updateParagraphIndex(i);
-        scrollToWord(i);
-        _savePosition();
-        break;
+  /// Rebuild the char-offset table whenever play() starts.
+  void _buildWordCharOffsets() {
+    _wordCharOffsets.clear();
+    int pos = 0;
+    for (int i = _playStartWordIndex; i < words.length; i++) {
+      _wordCharOffsets.add(pos);
+      pos += TtsUtils.sanitizeWordForTts(words[i]).length + 1; // +1 for space
+    }
+  }
+
+  /// Called by TTS progress handler on every spoken word.
+  /// Uses [start] (char offset in the TTS string) to find the correct word
+  /// via binary search — works correctly even when words repeat.
+  void _onTtsProgress(int start, int end, String spokenWord) {
+    if (_wordCharOffsets.isEmpty) return;
+
+    // Binary search: find largest offset ≤ start
+    int lo = 0, hi = _wordCharOffsets.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi + 1) ~/ 2;
+      if (_wordCharOffsets[mid] <= start) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
       }
     }
+
+    final globalIdx = _playStartWordIndex + lo;
+    if (globalIdx >= words.length) return;
+    if (globalIdx == currentWordIndex.value) return; // no change
+
+    currentWordIndex.value = globalIdx;
+    if (globalIdx < _wordParagraphIndex.length) {
+      currentParagraphIndex.value = _wordParagraphIndex[globalIdx];
+    }
+    scrollToWord(globalIdx);
+    _savePosition();
   }
 
-  void updateParagraphIndex(int wordIndex) {
-    if (wordIndex < _wordPositions.length) {
-      currentParagraphIndex.value = _wordPositions[wordIndex].paragraphIndex;
-    }
-  }
+  // ── Scroll ────────────────────────────────────────────────────────────────
 
   void scrollToWord(int index) {
-    if (index < wordKeys.length) {
-      final key = wordKeys[index];
-      final ctx = key.currentContext;
-      if (ctx != null) {
-        Scrollable.ensureVisible(
-          ctx,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-          alignment: 0.4, // keep highlighted word slightly above center
-        );
-      }
-    }
+    if (index < 0 || index >= wordKeys.length) return;
+    final ctx = wordKeys[index].currentContext;
+    if (ctx == null) return;
+    Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+      alignment: 0.5, // keep active word centered
+    );
   }
 
-  // ── Document setup ───────────────────────────────────────────────────────────
+  // ── Document setup ────────────────────────────────────────────────────────
+
   void setDocument(DocumentModel doc) {
     currentDoc.value = doc;
     isLoading.value = true;
     hasError.value = false;
+    isCompleted.value = false;
     currentWordIndex.value = 0;
     currentParagraphIndex.value = 0;
 
@@ -142,25 +180,23 @@ class ReaderController extends GetxController {
 
       final cleaned = ChunkEngine.cleanText(rawText);
 
-      // Split into paragraphs — preserve single line-breaks as paragraph breaks
-      paragraphs.value = cleaned
-          .split(RegExp(r'\n+'))
-          .map((e) => e.trim())
-          .where((e) => e.isNotEmpty)
-          .toList();
+      // Use ChunkEngine.toParagraphs so each paragraph is one item
+      // (double-newline = paragraph break; single newline → space)
+      paragraphs.value = ChunkEngine.toParagraphs(cleaned);
 
-      // Build flat word list + position map
+      // Build flat word list + paragraph index map + GlobalKeys
       words.clear();
-      _wordPositions.clear();
+      _wordParagraphIndex.clear();
       wordKeys.clear();
 
       for (int pIdx = 0; pIdx < paragraphs.length; pIdx++) {
-        final paraWords = paragraphs[pIdx].split(RegExp(r'\s+'));
-        for (int wIdx = 0; wIdx < paraWords.length; wIdx++) {
-          final w = paraWords[wIdx];
-          if (w.isEmpty) continue;
+        final paraWords = paragraphs[pIdx]
+            .split(RegExp(r'\s+'))
+            .where((w) => w.isNotEmpty)
+            .toList();
+        for (final w in paraWords) {
           words.add(w);
-          _wordPositions.add(_WordPos(pIdx, wIdx));
+          _wordParagraphIndex.add(pIdx);
           wordKeys.add(GlobalKey());
         }
       }
@@ -168,6 +204,7 @@ class ReaderController extends GetxController {
       // Restore last position
       if (doc.lastPosition > 0 && doc.lastPosition < words.length) {
         currentWordIndex.value = doc.lastPosition;
+        currentParagraphIndex.value = _wordParagraphIndex[doc.lastPosition];
       }
     } catch (e) {
       hasError.value = true;
@@ -177,18 +214,24 @@ class ReaderController extends GetxController {
     }
   }
 
-  // ── Playback ─────────────────────────────────────────────────────────────────
+  // ── Playback ──────────────────────────────────────────────────────────────
+
   Future<void> play() async {
     if (words.isEmpty || isPlaying.value) return;
-
+    isCompleted.value = false;
     isPlaying.value = true;
     _isStopping = false;
 
-    // Speak from current word to end
-    final remaining = words.sublist(currentWordIndex.value).join(' ');
+    _playStartWordIndex = currentWordIndex.value;
+    _buildWordCharOffsets();
+
+    final ttsText = words
+        .sublist(_playStartWordIndex)
+        .map(TtsUtils.sanitizeWordForTts)
+        .join(' ');
 
     _completer = Completer();
-    await tts.speak(remaining);
+    await tts.speak(ttsText);
     await _completer!.future;
 
     if (!_isStopping) {
@@ -207,23 +250,63 @@ class ReaderController extends GetxController {
     _isStopping = false;
   }
 
+  Future<void> togglePlay() async {
+    isPlaying.value ? await pause() : await play();
+  }
+
+  /// Skip back 10 words
   Future<void> rewind() async {
     final wasPlaying = isPlaying.value;
     await pause();
     currentWordIndex.value =
-        (currentWordIndex.value - 50).clamp(0, words.length - 1);
-    updateParagraphIndex(currentWordIndex.value);
+        (currentWordIndex.value - 10).clamp(0, words.length - 1);
+    _syncParagraphIndex();
     scrollToWord(currentWordIndex.value);
     if (wasPlaying) await play();
   }
 
+  /// Skip forward 10 words
   Future<void> forward() async {
     final wasPlaying = isPlaying.value;
     await pause();
     currentWordIndex.value =
-        (currentWordIndex.value + 50).clamp(0, words.length - 1);
-    updateParagraphIndex(currentWordIndex.value);
+        (currentWordIndex.value + 10).clamp(0, words.length - 1);
+    _syncParagraphIndex();
     scrollToWord(currentWordIndex.value);
+    if (wasPlaying) await play();
+  }
+
+  /// Jump to the start of the previous paragraph
+  Future<void> prevParagraph() async {
+    if (paragraphs.isEmpty) return;
+    final wasPlaying = isPlaying.value;
+    await pause();
+
+    final targetPara =
+    (currentParagraphIndex.value - 1).clamp(0, paragraphs.length - 1);
+    final idx = _wordParagraphIndex.indexOf(targetPara);
+    if (idx >= 0) {
+      currentWordIndex.value = idx;
+      currentParagraphIndex.value = targetPara;
+      scrollToWord(idx);
+    }
+    if (wasPlaying) await play();
+  }
+
+  /// Jump to the start of the next paragraph
+  Future<void> nextParagraph() async {
+    if (paragraphs.isEmpty) return;
+    final wasPlaying = isPlaying.value;
+    await pause();
+
+    final targetPara =
+    (currentParagraphIndex.value + 1).clamp(0, paragraphs.length - 1);
+    final idx = _wordParagraphIndex.indexOf(targetPara);
+    if (idx >= 0) {
+      currentWordIndex.value = idx;
+      currentParagraphIndex.value = targetPara;
+      scrollToWord(idx);
+    }
     if (wasPlaying) await play();
   }
 
@@ -231,25 +314,27 @@ class ReaderController extends GetxController {
     final wasPlaying = isPlaying.value;
     await pause();
     currentWordIndex.value = index.clamp(0, words.length - 1);
-    updateParagraphIndex(currentWordIndex.value);
+    _syncParagraphIndex();
     scrollToWord(currentWordIndex.value);
     if (wasPlaying) await play();
   }
 
-  // ── Speed ────────────────────────────────────────────────────────────────────
+  // ── Settings (persisted) ──────────────────────────────────────────────────
+
   Future<void> setSpeed(double value) async {
     speed.value = value;
+    Hive.box('settings').put('tts_speed', value);
     final wasPlaying = isPlaying.value;
     if (wasPlaying) await pause();
     await tts.setSpeechRate(value);
     if (wasPlaying) await play();
   }
 
-  // ── Language ─────────────────────────────────────────────────────────────────
   Future<void> setLanguage(String langCode) async {
     final wasPlaying = isPlaying.value;
     if (wasPlaying) await pause();
     selectedLanguage.value = langCode;
+    Hive.box('settings').put('tts_language', langCode);
     try {
       await tts.setLanguage(langCode);
     } catch (e) {
@@ -260,33 +345,35 @@ class ReaderController extends GetxController {
     if (wasPlaying) await play();
   }
 
-  // ── Voice ────────────────────────────────────────────────────────────────────
   Future<void> setVoice(Map voice) async {
     final wasPlaying = isPlaying.value;
     if (wasPlaying) await pause();
     selectedVoice.value = voice;
     try {
       await tts.setVoice(Map<String, String>.from(voice));
+      Hive.box('settings').put('tts_voice_name', voice['name']?.toString());
     } catch (e) {
       debugPrint("Voice set error: $e");
     }
     if (wasPlaying) await play();
   }
 
-  // ── Save MP3 ─────────────────────────────────────────────────────────────────
+  // ── Save MP3 ──────────────────────────────────────────────────────────────
+
   Future<void> saveAsMp3() async {
     if (words.isEmpty) return;
     isSavingMp3.value = true;
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final docName =
-          currentDoc.value?.name.replaceAll(RegExp(r'[^\w\s]'), '').trim() ??
-              'audio';
+      final docName = currentDoc.value?.name
+          .replaceAll(RegExp(r'[^\w\s]'), '')
+          .trim() ??
+          'audio';
       final path = '${dir.path}/$docName.mp3';
-      final fullText = words.join(' ');
+      final fullText = words.map(TtsUtils.sanitizeWordForTts).join(' ');
       await tts.synthesizeToFile(fullText, path);
       Get.snackbar(
-        "Saved",
+        "✅ Saved",
         "Audio saved to: $path",
         snackPosition: SnackPosition.BOTTOM,
         duration: const Duration(seconds: 4),
@@ -299,7 +386,15 @@ class ReaderController extends GetxController {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  void _syncParagraphIndex() {
+    final idx = currentWordIndex.value;
+    if (idx < _wordParagraphIndex.length) {
+      currentParagraphIndex.value = _wordParagraphIndex[idx];
+    }
+  }
+
   void _savePosition() {
     final doc = currentDoc.value;
     if (doc == null) return;
@@ -312,10 +407,8 @@ class ReaderController extends GetxController {
   String get wordProgress =>
       "${currentWordIndex.value} / ${words.length} words";
 
-  double get progressPercent {
-    if (words.isEmpty) return 0;
-    return currentWordIndex.value / words.length;
-  }
+  double get progressPercent =>
+      words.isEmpty ? 0 : currentWordIndex.value / words.length;
 
   @override
   void onClose() {
@@ -323,10 +416,4 @@ class ReaderController extends GetxController {
     scrollController.dispose();
     super.onClose();
   }
-}
-
-class _WordPos {
-  final int paragraphIndex;
-  final int wordIndexInPara;
-  _WordPos(this.paragraphIndex, this.wordIndexInPara);
 }

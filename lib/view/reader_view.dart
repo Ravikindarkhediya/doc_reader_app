@@ -1,40 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+
 import '../controller/reader_controller.dart';
 import '../controller/theme_controller.dart';
+import '../core/utils/tts_utils.dart';
 
 class ReaderView extends GetView<ReaderController> {
   const ReaderView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final c = Theme.of(context).extension<AppColorExtension>()!;
-
-    return Scaffold(
-      backgroundColor: c.background,
-      appBar: _buildAppBar(c),
-      body: Column(
-        children: [
-          // ── Top progress bar ──────────────────────────────────────────────
-          Obx(() => LinearProgressIndicator(
-            value: controller.progressPercent,
-            backgroundColor: c.highlight,
-            valueColor: AlwaysStoppedAnimation(c.primary),
-            minHeight: 3,
-          )),
-
-          // ── Word reader body ──────────────────────────────────────────────
-          Expanded(child: _buildWordView(c)),
-
-          // ── Mini player ───────────────────────────────────────────────────
-          _buildMiniPlayer(c),
-        ],
-      ),
+    // GetBuilder ensures ReaderView rebuilds on theme changes
+    return GetBuilder<ThemeController>(
+      builder: (_) {
+        final c = Theme.of(context).extension<AppColorExtension>()!;
+        return Scaffold(
+          backgroundColor: c.background,
+          appBar: _buildAppBar(context, c),
+          body: Column(
+            children: [
+              // Top progress bar
+              Obx(() => LinearProgressIndicator(
+                value: controller.progressPercent,
+                backgroundColor: c.highlight,
+                valueColor: AlwaysStoppedAnimation(c.primary),
+                minHeight: 3,
+              )),
+              Expanded(child: _buildWordView(c)),
+              _buildMiniPlayer(context, c),
+            ],
+          ),
+        );
+      },
     );
   }
 
   // ── AppBar ────────────────────────────────────────────────────────────────
-  PreferredSizeWidget _buildAppBar(AppColorExtension c) {
+
+  PreferredSizeWidget _buildAppBar(BuildContext context, AppColorExtension c) {
     return AppBar(
       backgroundColor: c.card,
       elevation: 0,
@@ -47,9 +50,8 @@ class ReaderView extends GetView<ReaderController> {
       ),
       title: Obx(() {
         final doc = controller.currentDoc.value;
-        final title = doc?.title?.isNotEmpty == true ? doc!.title! : doc?.name ?? "Reader";
-        final subtitle = doc?.subtitle?.isNotEmpty == true ? doc!.subtitle : null;
-
+        final title =
+            (doc?.title?.isNotEmpty == true ? doc!.title! : doc?.name) ?? "Reader";
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -58,59 +60,48 @@ class ReaderView extends GetView<ReaderController> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: c.textPrimary,
-              ),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: c.textPrimary),
             ),
-            if (subtitle != null)
-              Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: c.textSecondary),
-              ),
-            Text(
+            Obx(() => Text(
               controller.wordProgress,
               style: TextStyle(fontSize: 10, color: c.textSecondary),
-            ),
+            )),
           ],
         );
       }),
       actions: [
         IconButton(
           icon: Icon(Icons.tune_rounded, color: c.textSecondary),
-          onPressed: () => _showOptionsSheet(c),
+          onPressed: () => _showOptionsSheet(context, c),
         ),
       ],
     );
   }
 
   // ── Word View ─────────────────────────────────────────────────────────────
+
   Widget _buildWordView(AppColorExtension c) {
     return Obx(() {
       if (controller.isLoading.value) {
-        return const Center(child: CircularProgressIndicator());
+        return Center(
+            child: CircularProgressIndicator(color: c.primary));
       }
-
       if (controller.hasError.value) {
         return Center(
-          child: Text(
-            controller.errorMessage.value,
-            style: TextStyle(color: c.textSecondary),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(controller.errorMessage.value,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: c.textSecondary)),
           ),
         );
       }
-
       if (controller.words.isEmpty) {
         return Center(
-          child: Text("No content", style: TextStyle(color: c.textSecondary)),
-        );
+            child: Text("No content", style: TextStyle(color: c.textSecondary)));
       }
-
-      // We render paragraph by paragraph.
-      // Each paragraph is a card container. Words inside are Wrap'd with
-      // per-word highlighting via GlobalKeys.
       return SingleChildScrollView(
         controller: controller.scrollController,
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -125,7 +116,7 @@ class ReaderView extends GetView<ReaderController> {
   List<Widget> _buildParagraphCards(AppColorExtension c) {
     final paragraphs = controller.paragraphs;
     final widgets = <Widget>[];
-    int wordOffset = 0; // global word index offset for current paragraph
+    int wordOffset = 0;
 
     for (int pIdx = 0; pIdx < paragraphs.length; pIdx++) {
       final paraWords = paragraphs[pIdx]
@@ -133,14 +124,14 @@ class ReaderView extends GetView<ReaderController> {
           .where((w) => w.isNotEmpty)
           .toList();
 
-      final int paraStartIndex = wordOffset;
-      final int capturedWordOffset = wordOffset;
+      final capturedOffset = wordOffset;
+      wordOffset += paraWords.length;
 
       widgets.add(
         Obx(() {
-          final activeWordIdx = controller.currentWordIndex.value;
-          final activeParagraph = controller.currentParagraphIndex.value;
-          final isParagraphActive = activeParagraph == pIdx;
+          final activeWord = controller.currentWordIndex.value;
+          final activePara = controller.currentParagraphIndex.value;
+          final isParagraphActive = activePara == pIdx;
 
           return AnimatedContainer(
             duration: const Duration(milliseconds: 200),
@@ -162,18 +153,16 @@ class ReaderView extends GetView<ReaderController> {
               spacing: 4,
               runSpacing: 6,
               children: List.generate(paraWords.length, (wIdx) {
-                final globalIdx = capturedWordOffset + wIdx;
-                final isActive = globalIdx == activeWordIdx;
-
-                // Bounds check — keys list is built during setDocument
+                final globalIdx = capturedOffset + wIdx;
+                final isActive = globalIdx == activeWord;
                 final hasKey = globalIdx < controller.wordKeys.length;
 
                 return GestureDetector(
                   onTap: () => controller.jumpToWord(globalIdx),
                   child: Container(
                     key: hasKey ? controller.wordKeys[globalIdx] : null,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 3, vertical: 2),
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
                     decoration: isActive
                         ? BoxDecoration(
                       color: c.primary.withOpacity(0.2),
@@ -184,11 +173,10 @@ class ReaderView extends GetView<ReaderController> {
                       paraWords[wIdx],
                       style: TextStyle(
                         fontSize: 16,
-                        height: 1.65,
+                        height: 1.7,
                         color: isActive ? c.primary : c.textPrimary,
-                        fontWeight: isActive
-                            ? FontWeight.w700
-                            : FontWeight.w400,
+                        fontWeight:
+                        isActive ? FontWeight.w700 : FontWeight.w400,
                       ),
                     ),
                   ),
@@ -198,150 +186,92 @@ class ReaderView extends GetView<ReaderController> {
           );
         }),
       );
-
-      wordOffset += paraWords.length;
     }
-
     return widgets;
   }
 
   // ── Mini Player ───────────────────────────────────────────────────────────
-  Widget _buildMiniPlayer(AppColorExtension c) {
+
+  Widget _buildMiniPlayer(BuildContext context, AppColorExtension c) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 22),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
       decoration: BoxDecoration(
         color: c.card,
-        borderRadius:
-        const BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         boxShadow: [
           BoxShadow(
-            color: c.shadow,
-            blurRadius: 20,
-            offset: const Offset(0, -4),
-          ),
+              color: c.shadow,
+              blurRadius: 20,
+              offset: const Offset(0, -4)),
         ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ── Seek slider (word position) ─────────────────────────────────
+          // ── Word progress slider ──────────────────────────────────────────
           Obx(() {
             final total = controller.words.length.toDouble();
             final current = controller.currentWordIndex.value
                 .toDouble()
                 .clamp(0.0, total > 0 ? total : 1.0);
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.text_fields_rounded,
-                        size: 14, color: c.textSecondary),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: SliderTheme(
-                        data: SliderTheme.of(Get.context!).copyWith(
-                          trackHeight: 3,
-                          thumbShape:
-                          const RoundSliderThumbShape(enabledThumbRadius: 7),
-                          overlayShape:
-                          const RoundSliderOverlayShape(overlayRadius: 14),
-                          activeTrackColor: c.primary,
-                          inactiveTrackColor: c.highlight,
-                          thumbColor: c.primary,
-                          overlayColor: c.primary.withOpacity(0.15),
-                        ),
-                        child: Slider(
-                          value: current,
-                          min: 0,
-                          max: total > 0 ? total : 1,
-                          onChangeStart: (_) {
-                            // pause while dragging for smooth UX
-                            if (controller.isPlaying.value) {
-                              controller.tts.stop();
-                            }
-                          },
-                          onChanged: (v) {
-                            controller.currentWordIndex.value = v.toInt();
-                            controller.updateParagraphIndex(v.toInt());
-                            controller.scrollToWord(v.toInt());
-                          },
-                          onChangeEnd: (v) =>
-                              controller.jumpToWord(v.toInt()),
-                        ),
-                      ),
-                    ),
-                    Text(
-                      "${controller.currentWordIndex.value}/${controller.words.length}",
-                      style: TextStyle(
-                          fontSize: 11, color: c.textSecondary),
-                    ),
-                  ],
-                ),
-              ],
+            return _sliderRow(
+              icon: Icons.text_fields_rounded,
+              label:
+              "${controller.currentWordIndex.value}/${controller.words.length}",
+              labelColor: c.textSecondary,
+              c: c,
+              child: Slider(
+                value: current,
+                min: 0,
+                max: total > 0 ? total : 1,
+                onChangeStart: (_) {
+                  if (controller.isPlaying.value) controller.tts.stop();
+                },
+                onChanged: (v) {
+                  controller.currentWordIndex.value = v.toInt();
+                },
+                onChangeEnd: (v) => controller.jumpToWord(v.toInt()),
+              ),
+              trackColor: c.primary,
             );
           }),
 
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
 
-          // ── Speed slider ────────────────────────────────────────────────
-          Obx(() => Row(
-            children: [
-              Icon(Icons.speed_rounded,
-                  size: 14, color: c.textSecondary),
-              const SizedBox(width: 6),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(Get.context!).copyWith(
-                    trackHeight: 3,
-                    thumbShape: const RoundSliderThumbShape(
-                        enabledThumbRadius: 7),
-                    overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 14),
-                    activeTrackColor: c.secondary,
-                    inactiveTrackColor: c.highlight,
-                    thumbColor: c.secondary,
-                    overlayColor: c.secondary.withOpacity(0.15),
-                  ),
-                  child: Slider(
-                    value: controller.speed.value,
-                    min: 0.1,
-                    max: 1.5,
-                    divisions: 14,
-                    onChanged: controller.setSpeed,
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: c.secondary.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  "${controller.speed.value.toStringAsFixed(1)}x",
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: c.secondary,
-                      fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
+          // ── Speed slider ──────────────────────────────────────────────────
+          Obx(() => _sliderRow(
+            icon: Icons.speed_rounded,
+            label: "${controller.speed.value.toStringAsFixed(1)}x",
+            labelColor: c.secondary,
+            c: c,
+            child: Slider(
+              value: controller.speed.value,
+              min: 0.1,
+              max: 1.5,
+              divisions: 14,
+              onChanged: controller.setSpeed,
+            ),
+            trackColor: c.secondary,
           )),
 
           const SizedBox(height: 10),
 
-          // ── Transport controls ─────────────────────────────────────────
+          // ── Transport controls ────────────────────────────────────────────
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _controlBtn(Icons.replay_10_rounded, c, controller.rewind),
+              // ◀◀ Previous paragraph
+              _smallBtn(
+                  Icons.skip_previous_rounded, c, controller.prevParagraph,
+                  tooltip: 'Prev paragraph'),
               const SizedBox(width: 8),
+              // ⏪ -10 words
+              _smallBtn(Icons.replay_10_rounded, c, controller.rewind,
+                  tooltip: '-10 words'),
+              const SizedBox(width: 12),
+              // ▶ / ⏸ Play / Pause
               Obx(() => GestureDetector(
-                onTap: controller.isPlaying.value
-                    ? controller.pause
-                    : controller.play,
+                onTap: controller.togglePlay,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.all(18),
@@ -373,8 +303,15 @@ class ReaderView extends GetView<ReaderController> {
                   ),
                 ),
               )),
+              const SizedBox(width: 12),
+              // ⏩ +10 words
+              _smallBtn(Icons.forward_10_rounded, c, controller.forward,
+                  tooltip: '+10 words'),
               const SizedBox(width: 8),
-              _controlBtn(Icons.forward_10_rounded, c, controller.forward),
+              // ▶▶ Next paragraph
+              _smallBtn(
+                  Icons.skip_next_rounded, c, controller.nextParagraph,
+                  tooltip: 'Next paragraph'),
             ],
           ),
         ],
@@ -382,20 +319,77 @@ class ReaderView extends GetView<ReaderController> {
     );
   }
 
-  Widget _controlBtn(IconData icon, AppColorExtension c, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration:
-        BoxDecoration(color: c.highlight, shape: BoxShape.circle),
-        child: Icon(icon, color: c.textPrimary, size: 24),
-      ),
+  Widget _sliderRow({
+    required IconData icon,
+    required String label,
+    required Color labelColor,
+    required AppColorExtension c,
+    required Widget child,
+    required Color trackColor,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: c.textSecondary),
+        const SizedBox(width: 6),
+        Expanded(
+          child: SliderTheme(
+            data: SliderThemeData(
+              trackHeight: 3,
+              thumbShape:
+              const RoundSliderThumbShape(enabledThumbRadius: 7),
+              overlayShape:
+              const RoundSliderOverlayShape(overlayRadius: 14),
+              activeTrackColor: trackColor,
+              inactiveTrackColor: c.highlight,
+              thumbColor: trackColor,
+              overlayColor: trackColor.withOpacity(0.15),
+            ),
+            child: child,
+          ),
+        ),
+        Container(
+          padding:
+          const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: labelColor.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+                fontSize: 11,
+                color: labelColor,
+                fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
     );
   }
 
+  Widget _smallBtn(
+      IconData icon,
+      AppColorExtension c,
+      VoidCallback onTap, {
+        String? tooltip,
+      }) {
+    final btn = GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration:
+        BoxDecoration(color: c.highlight, shape: BoxShape.circle),
+        child: Icon(icon, color: c.textPrimary, size: 22),
+      ),
+    );
+    if (tooltip != null) {
+      return Tooltip(message: tooltip, child: btn);
+    }
+    return btn;
+  }
+
   // ── Options sheet ─────────────────────────────────────────────────────────
-  void _showOptionsSheet(AppColorExtension c) {
+
+  void _showOptionsSheet(BuildContext context, AppColorExtension c) {
     Get.bottomSheet(
       Container(
         padding: const EdgeInsets.all(20),
@@ -408,13 +402,11 @@ class ReaderView extends GetView<ReaderController> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              "Options",
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: c.textPrimary),
-            ),
+            Text("Options",
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: c.textPrimary)),
             const SizedBox(height: 16),
             _optTile(Icons.language_rounded, "Language", c,
                     () => _showLanguagePicker(c)),
@@ -422,7 +414,7 @@ class ReaderView extends GetView<ReaderController> {
                     () => _showVoicePicker(c)),
             Obx(() => _optTile(
               Icons.audiotrack_rounded,
-              controller.isSavingMp3.value ? "Saving..." : "Save as MP3",
+              controller.isSavingMp3.value ? "Saving…" : "Save as MP3",
               c,
               controller.isSavingMp3.value
                   ? null
@@ -434,7 +426,6 @@ class ReaderView extends GetView<ReaderController> {
           ],
         ),
       ),
-      isScrollControlled: true,
     );
   }
 
@@ -457,8 +448,7 @@ class ReaderView extends GetView<ReaderController> {
       title: Text(title,
           style: TextStyle(
               color: c.textPrimary, fontWeight: FontWeight.w500)),
-      trailing:
-      Icon(Icons.chevron_right_rounded, color: c.textLight),
+      trailing: Icon(Icons.chevron_right_rounded, color: c.textLight),
       onTap: onTap,
     );
   }
@@ -466,58 +456,28 @@ class ReaderView extends GetView<ReaderController> {
   void _showLanguagePicker(AppColorExtension c) {
     Get.back();
     Get.bottomSheet(
-      Container(
-        padding: const EdgeInsets.all(20),
-        height: 420,
-        decoration: BoxDecoration(
-          color: c.card,
-          borderRadius:
-          const BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Select Language",
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: c.textPrimary),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: Obx(() {
-                final langs = controller.availableLanguages;
-                if (langs.isEmpty) {
-                  return Center(
-                    child: Text("No languages available",
-                        style: TextStyle(color: c.textSecondary)),
-                  );
-                }
-                return ListView.builder(
-                  itemCount: langs.length,
-                  itemBuilder: (_, i) {
-                    final lang = langs[i];
-                    final isSelected =
-                        controller.selectedLanguage.value == lang;
-                    return ListTile(
-                      title: Text(lang,
-                          style: TextStyle(color: c.textPrimary)),
-                      trailing: isSelected
-                          ? Icon(Icons.check_circle_rounded,
-                          color: c.primary)
-                          : null,
-                      onTap: () {
-                        controller.setLanguage(lang);
-                        Get.back();
-                      },
-                    );
-                  },
-                );
-              }),
-            ),
-          ],
-        ),
+      _TtsPicker(
+        title: "Select Language",
+        c: c,
+        itemCount: controller.availableLanguages.length,
+        itemBuilder: (i) {
+          final code = controller.availableLanguages[i];
+          final isSelected = controller.selectedLanguage.value == code;
+          return ListTile(
+            title: Text(TtsUtils.formatLanguageName(code),
+                style: TextStyle(color: c.textPrimary)),
+            subtitle: Text(code,
+                style: TextStyle(color: c.textSecondary, fontSize: 11)),
+            trailing: isSelected
+                ? Icon(Icons.check_circle_rounded, color: c.primary)
+                : null,
+            onTap: () {
+              controller.setLanguage(code);
+              Get.back();
+            },
+          );
+        },
+        emptyMessage: "No languages available",
       ),
     );
   }
@@ -525,59 +485,80 @@ class ReaderView extends GetView<ReaderController> {
   void _showVoicePicker(AppColorExtension c) {
     Get.back();
     Get.bottomSheet(
-      Container(
-        padding: const EdgeInsets.all(20),
-        height: 420,
-        decoration: BoxDecoration(
-          color: c.card,
-          borderRadius:
-          const BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Select Voice",
+      _TtsPicker(
+        title: "Select Voice",
+        c: c,
+        itemCount: controller.availableVoices.length,
+        itemBuilder: (i) {
+          final voice = controller.availableVoices[i];
+          final name = TtsUtils.formatVoiceName(voice);
+          final locale = voice['locale']?.toString() ?? '';
+          final isSelected =
+              controller.selectedVoice.value?['name'] == voice['name'];
+          return ListTile(
+            title: Text(name, style: TextStyle(color: c.textPrimary)),
+            subtitle: Text(locale,
+                style: TextStyle(color: c.textSecondary, fontSize: 11)),
+            trailing: isSelected
+                ? Icon(Icons.check_circle_rounded, color: c.primary)
+                : null,
+            onTap: () {
+              controller.setVoice(voice);
+              Get.back();
+            },
+          );
+        },
+        emptyMessage: "No voices available",
+      ),
+    );
+  }
+}
+
+/// Reusable scrollable bottom-sheet list for TTS pickers
+class _TtsPicker extends StatelessWidget {
+  final String title;
+  final AppColorExtension c;
+  final int itemCount;
+  final Widget Function(int i) itemBuilder;
+  final String emptyMessage;
+
+  const _TtsPicker({
+    required this.title,
+    required this.c,
+    required this.itemCount,
+    required this.itemBuilder,
+    required this.emptyMessage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      height: 440,
+      decoration: BoxDecoration(
+        color: c.card,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title,
               style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
-                  color: c.textPrimary),
+                  color: c.textPrimary)),
+          const SizedBox(height: 12),
+          Expanded(
+            child: itemCount == 0
+                ? Center(
+                child: Text(emptyMessage,
+                    style: TextStyle(color: c.textSecondary)))
+                : ListView.builder(
+              itemCount: itemCount,
+              itemBuilder: (_, i) => itemBuilder(i),
             ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: Obx(() {
-                final voices = controller.availableVoices;
-                if (voices.isEmpty) {
-                  return Center(
-                    child: Text("No voices available",
-                        style: TextStyle(color: c.textSecondary)),
-                  );
-                }
-                return ListView.builder(
-                  itemCount: voices.length,
-                  itemBuilder: (_, i) {
-                    final voice = voices[i];
-                    final name =
-                        voice['name']?.toString() ?? 'Voice ${i + 1}';
-                    final locale =
-                        voice['locale']?.toString() ?? '';
-                    return ListTile(
-                      title: Text(name,
-                          style: TextStyle(color: c.textPrimary)),
-                      subtitle: Text(locale,
-                          style: TextStyle(
-                              color: c.textSecondary, fontSize: 12)),
-                      onTap: () {
-                        controller.setVoice(voice);
-                        Get.back();
-                      },
-                    );
-                  },
-                );
-              }),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

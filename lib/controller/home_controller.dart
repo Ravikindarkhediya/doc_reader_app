@@ -1,5 +1,4 @@
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
@@ -15,12 +14,10 @@ import 'reader_controller.dart';
 enum SortMode { recent, name, oldest }
 
 class HomeController extends GetxController {
-  // Lists
   var allDocs = <DocumentModel>[].obs;
   var recentDocs = <DocumentModel>[].obs;
   var likedDocs = <DocumentModel>[].obs;
   var filteredDocs = <DocumentModel>[].obs;
-
   var originalDocs = <DocumentModel>[];
 
   var isLoading = false.obs;
@@ -46,8 +43,6 @@ class HomeController extends GetxController {
   void _refreshFilteredLists() {
     likedDocs.value = originalDocs.where((d) => d.isLiked).toList();
     recentDocs.value = List.from(originalDocs.reversed);
-
-    // Apply search if active
     if (searchQuery.value.isNotEmpty) {
       search(searchQuery.value);
     } else {
@@ -86,116 +81,99 @@ class HomeController extends GetxController {
       filteredDocs.value = List.from(originalDocs);
     } else {
       final q = query.toLowerCase();
-      final results = originalDocs.where((doc) =>
-          doc.name.toLowerCase().contains(q)).toList();
+      final results =
+      originalDocs.where((doc) => doc.name.toLowerCase().contains(q)).toList();
       allDocs.value = results;
       filteredDocs.value = results;
     }
   }
 
-  // Toggle Like
   void toggleLike(DocumentModel doc) {
     doc.isLiked = !doc.isLiked;
     doc.save();
     _refreshFilteredLists();
   }
 
-  // Open Document
   void openDocument(DocumentModel doc) {
     final readerController = Get.find<ReaderController>();
     readerController.setDocument(doc);
     Get.to(() => const ReaderView(), transition: Transition.cupertino);
   }
 
-  // Pick + Import Document
   Future<void> pickDocument() async {
     try {
-
       isLoading.value = true;
       final result = await _fileService.pickDocument();
 
-      if (result == null || result.files.isEmpty) {
-        isLoading.value = false;
-        return;
-      }
+      if (result == null || result.files.isEmpty) return;
 
       final file = result.files.single;
-
       if (file.path == null && file.bytes == null) {
         _showError("Invalid file: could not read data");
-        isLoading.value = false;
         return;
       }
 
-      // Size check (50MB max)
-      if (file.bytes != null && file.bytes!.length > 50 * 1024 * 1024) {
-        _showError("File too large. Max size: 50MB");
-        isLoading.value = false;
+      // Size check (50 MB)
+      final size = file.bytes?.length ?? await File(file.path!).length();
+      if (size > 50 * 1024 * 1024) {
+        _showError("File too large. Maximum size is 50 MB.");
         return;
       }
 
-      // Check duplicate
+      // Duplicate check
       final box = Hive.box<DocumentModel>('docs');
-      final exists = box.values.any((d) => d.name == file.name);
-      if (exists) {
+      if (box.values.any((d) => d.name == file.name)) {
         Get.snackbar(
           "Already Imported",
-          "\"${file.name}\" is already in your library",
+          '"${file.name}" is already in your library',
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.orange.shade700,
           colorText: Colors.white,
           margin: const EdgeInsets.all(12),
         );
-        isLoading.value = false;
         return;
       }
 
-      final ext = file.name.split('.').last.toLowerCase();
-      print("FILE NAME: ${file.name}");
-      print("EXT: $ext");
-      print("PATH: ${file.path}");
-      print("BYTES: ${file.bytes?.length}");
+      final ext = (file.name.split('.').last).toLowerCase();
       String rawText = '';
 
-      final pdfService = PdfService();
-
-// 🔥 Try PDF first (most common)
-      try {
-        rawText = file.bytes != null
-            ? await pdfService.extractTextFromBytes(file.bytes!)
-            : await pdfService.extractText(File(file.path!));
-
-        print("PDF extraction success");
-      } catch (e) {
-        print("Not a PDF or failed: $e");
-
-        // 🔥 fallback → treat as text
+      if (ext == 'pdf') {
+        // ── PDF ──────────────────────────────────────────────────────────────
+        try {
+          final pdfService = PdfService();
+          rawText = file.bytes != null
+              ? await pdfService.extractTextFromBytes(file.bytes!)
+              : await pdfService.extractText(File(file.path!));
+        } catch (e) {
+          debugPrint("PDF extraction failed: $e");
+        }
+      } else {
+        // ── All other readable formats (txt, md, html, csv, etc.) ────────────
         try {
           rawText = file.bytes != null
               ? FileService.readTxtFromBytes(file.bytes!)
               : await FileService.readTxtFile(File(file.path!));
-
-          print("Fallback text read success");
         } catch (e) {
-          _showError("Unsupported or unreadable file");
-          return;
+          debugPrint("Text read failed: $e");
         }
       }
 
-      final cleanedText = ChunkEngine.cleanText(rawText);
-      final wordCount = cleanedText.isNotEmpty ? ChunkEngine.wordCount(cleanedText) : 0;
-
-      if (cleanedText.trim().isEmpty) {
+      if (rawText.trim().isEmpty) {
         Get.snackbar(
           "⚠️ No Text Found",
-          "This may be a scanned PDF. Text-to-speech won't work.",
+          "This may be a scanned PDF or unsupported format. TTS won't work.",
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.orange.shade700,
           colorText: Colors.white,
           margin: const EdgeInsets.all(12),
           duration: const Duration(seconds: 4),
         );
+        // Still import with empty text so user can see the file
       }
+
+      final cleanedText = ChunkEngine.cleanText(rawText);
+      final wordCount =
+      cleanedText.isNotEmpty ? ChunkEngine.wordCount(cleanedText) : 0;
 
       final doc = DocumentModel(
         name: file.name,
@@ -211,7 +189,7 @@ class HomeController extends GetxController {
 
       Get.snackbar(
         "✅ Imported",
-        "\"${file.name}\" added to library",
+        '"${file.name}" added to your library',
         snackPosition: SnackPosition.BOTTOM,
         backgroundColor: Colors.green.shade700,
         colorText: Colors.white,
@@ -226,58 +204,50 @@ class HomeController extends GetxController {
     }
   }
 
-  // Rename Document
   void renameDoc(DocumentModel doc, String newName) {
     if (newName.trim().isEmpty) return;
-
-    final oldName = doc.name;
-
-    // 🔥 Extract extension
-    final ext = oldName.contains('.')
-        ? oldName.substring(oldName.lastIndexOf('.'))
+    final ext = doc.name.contains('.')
+        ? doc.name.substring(doc.name.lastIndexOf('.'))
         : '';
-
-    // 🔥 Remove extension from input if user typed it
     String cleanName = newName.trim();
     if (cleanName.contains('.')) {
       cleanName = cleanName.substring(0, cleanName.lastIndexOf('.'));
     }
-
-    doc.name = cleanName + ext; // 🔥 attach original extension
+    doc.name = cleanName + ext;
     doc.save();
-
     loadDocuments();
   }
 
-  String getNameWithoutExtension(String name) {
-    return name.contains('.')
-        ? name.substring(0, name.lastIndexOf('.'))
-        : name;
-  }
-  // Delete Document
+  String getNameWithoutExtension(String name) =>
+      name.contains('.') ? name.substring(0, name.lastIndexOf('.')) : name;
+
   Future<void> deleteDoc(DocumentModel doc) async {
     final confirmed = await Get.dialog<bool>(
       AlertDialog(
         title: const Text("Delete Document"),
-        content: Text("Delete \"${doc.name}\"? This cannot be undone."),
+        content: Text('Delete "${doc.name}"? This cannot be undone.'),
         actions: [
-          TextButton(onPressed: () => Get.back(result: false), child: const Text("Cancel")),
+          TextButton(
+              onPressed: () => Get.back(result: false),
+              child: const Text("Cancel")),
           TextButton(
             onPressed: () => Get.back(result: true),
-            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+            child:
+            const Text("Delete", style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
-
     if (confirmed == true) {
       await doc.delete();
       loadDocuments();
-      Get.snackbar("Deleted", "Document removed", snackPosition: SnackPosition.BOTTOM);
+      Get.snackbar("Deleted", "Document removed",
+          snackPosition: SnackPosition.BOTTOM);
     }
   }
 
   void _showError(String msg) {
+    isLoading.value = false;
     Get.snackbar(
       "Error",
       msg,
@@ -287,12 +257,9 @@ class HomeController extends GetxController {
     );
   }
 
-  // Navigate to All Docs screen
-  void goToAllDocs() {
-    Get.to(() => const AllDocumentsScreen(), transition: Transition.rightToLeft);
-  }
+  void goToAllDocs() =>
+      Get.to(() => const AllDocumentsScreen(), transition: Transition.rightToLeft);
 
-  void goToLiked() {
-    Get.to(() => const LikedScreen(), transition: Transition.rightToLeft);
-  }
+  void goToLiked() =>
+      Get.to(() => const LikedScreen(), transition: Transition.rightToLeft);
 }
